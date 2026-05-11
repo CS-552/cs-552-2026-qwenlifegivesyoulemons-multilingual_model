@@ -10,7 +10,13 @@
 set -e
 
 echo "[run_train] fixing bitsandbytes (cluster image ships an incompatible version)..."
-pip install --quiet --upgrade --force-reinstall "bitsandbytes>=0.44.0"
+# --no-deps: pip's resolver rejects all bnb versions because the image has
+# PyTorch 2.10+cu128 (newer than what bnb pins to). bnb doesn't actually need
+# a different torch, so we bypass the resolver and force the install.
+pip install --quiet --no-deps --force-reinstall "bitsandbytes>=0.43.0"
+
+echo "[run_train] verifying bnb import..."
+python3 -c "import bitsandbytes; print('[run_train] bnb import OK')"
 
 echo "[run_train] starting training..."
 exec python3 /scratch/multilingual/training/multilingual/train_lora.py \
