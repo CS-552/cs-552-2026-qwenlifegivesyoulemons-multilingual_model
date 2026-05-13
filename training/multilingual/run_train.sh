@@ -22,5 +22,5 @@ echo "[run_train] starting training..."
 exec python3 /scratch/multilingual/training/multilingual/train_lora.py \
     --train_file /scratch/multilingual/datasets/multilingual/train.jsonl \
     --dev_file /scratch/multilingual/datasets/multilingual/dev.jsonl \
-    --output_dir /scratch/multilingual/training/multilingual/outputs/lora_v1 \
-    --run_name lora_v1
+    --output_dir /scratch/multilingual/training/multilingual/outputs/lora_v2 \
+    --run_name lora_v2
