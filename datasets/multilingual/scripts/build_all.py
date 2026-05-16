@@ -60,10 +60,16 @@ def main():
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--copies", type=int, default=2,
                     help="variable-k augmented copies per train source item (bulk)")
-    ap.add_argument("--cs_weight", type=int, default=3,
-                    help="multiplier on --copies for CS items only. "
-                         "cs_weight=3 means CS source items produce 3x the "
-                         "augmented variants of bulk source items.")
+    ap.add_argument("--cs_weight", type=int, default=5,
+                    help="multiplier on --copies for CS (cultural-sensitive) items")
+    ap.add_argument("--include_weight", type=int, default=4,
+                    help="multiplier on --copies for INCLUDE items (regional / "
+                         "professional-licensing exams — closest to eval domain)")
+    ap.add_argument("--bulk_cap", type=int, default=4000,
+                    help="per-language cap on Global-MMLU *bulk* (non-CS) source "
+                         "items. Global-MMLU bulk is translated academic MMLU, not "
+                         "regional knowledge; capping it stops it from drowning the "
+                         "regional signal. 0 = no cap.")
     args = ap.parse_args()
 
     root = Path(args.root).resolve()
@@ -80,8 +86,27 @@ def main():
     print(f"  Source counts: {dict(Counter(x['source'] for x in items).most_common())}")
     print(f"  CS items:      {n_cs} ({n_cs/len(items):.1%} of pool)")
 
-    # Build distractor pool from ALL items (richer pool than train-only).
+    # Build distractor pool from ALL items, before any capping (richest pool).
     pool = build_distractor_pool(items)
+
+    # Cap Global-MMLU *bulk* per language so translated-academic content does
+    # not dominate. CS / INCLUDE / English are never capped.
+    if args.bulk_cap > 0:
+        def is_bulk(it):
+            return it["source"] == "global_mmlu" and not it.get("_is_cs")
+
+        kept, bulk_by_lang = [], defaultdict(list)
+        for it in items:
+            (bulk_by_lang[it["lang"]] if is_bulk(it) else kept).append(it)
+        capped_n = 0
+        for lang, bucket in bulk_by_lang.items():
+            rng.shuffle(bucket)
+            kept.extend(bucket[: args.bulk_cap])
+            capped_n += min(len(bucket), args.bulk_cap)
+        before = len(items)
+        items = kept
+        print(f"  Bulk cap: Global-MMLU bulk -> {capped_n} items "
+              f"(<= {args.bulk_cap}/lang); pool size {before} -> {len(items)}")
 
     # Split source items per-language BEFORE augmentation (prevents leakage).
     by_lang = defaultdict(list)
@@ -103,19 +128,27 @@ def main():
             train_src.extend(bucket)
             print(f"  {lang}: train_src={len(bucket)} dev_src=0 (English; not evaluated)")
 
-    # Augment train. CS items get cs_weight extra copies.
-    train_aug = []
-    cs_train_src = 0
-    for item in train_src:
+    # Per-source augmentation weight: regional sources get more copies than
+    # translated-academic bulk, so the model sees the eval distribution more.
+    def copies_for(item):
         if item.get("_is_cs"):
-            n_copies = args.copies * args.cs_weight
-            cs_train_src += 1
-        else:
-            n_copies = args.copies
+            return args.copies * args.cs_weight
+        if item["source"] == "include":
+            return args.copies * args.include_weight
+        return args.copies  # global_mmlu bulk, mmlu_en
+
+    train_aug = []
+    src_copy_counts = Counter()
+    for item in train_src:
+        n_copies = copies_for(item)
+        tag = "cs" if item.get("_is_cs") else item["source"]
+        src_copy_counts[tag] += 1
         for _ in range(n_copies):
             train_aug.append(augment_one(item, pool, rng))
-    print(f"Train augmented: {len(train_src)} src -> {len(train_aug)} aug "
-          f"(cs_src={cs_train_src} x {args.copies * args.cs_weight} copies)")
+    print(f"Train augmented: {len(train_src)} src -> {len(train_aug)} aug")
+    print(f"  src item counts by bucket: {dict(src_copy_counts)}")
+    print(f"  copies: bulk={args.copies} cs={args.copies*args.cs_weight} "
+          f"include={args.copies*args.include_weight}")
 
     # Augment dev: exactly one copy per held-out source item.
     dev_aug = [augment_one(item, pool, rng) for item in dev_src]

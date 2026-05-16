@@ -20,6 +20,7 @@ Auth: set HF_TOKEN in the environment, or `huggingface-cli login` first.
 """
 
 import argparse
+import datetime
 import json
 import os
 from pathlib import Path
@@ -71,12 +72,19 @@ def main():
                     help="e.g. cs-552-2026-<org>/multilingual_model")
     ap.add_argument("--push", action="store_true",
                     help="actually push to HF (otherwise local merge only)")
-    ap.add_argument("--commit_msg", default="LoRA SFT checkpoint")
+    ap.add_argument("--commit_msg", default=None,
+                    help="commit message prefix. If omitted, auto-generates "
+                         "'LoRA SFT: <run_name> @ <timestamp>' so v1/v2/v3 "
+                         "are visually distinguishable on HF's commit history.")
     args = ap.parse_args()
 
     adapter_dir = Path(args.adapter_dir).resolve()
     merged_dir = Path(args.merged_dir or adapter_dir.parent / "merged").resolve()
     merged_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    run_name = adapter_dir.parent.name  # e.g. 'lora_v2' from .../lora_v2/final
+    commit_msg = args.commit_msg or f"LoRA SFT: {run_name} @ {timestamp}"
 
     print(f"[load] tokenizer from {adapter_dir}")
     tokenizer = AutoTokenizer.from_pretrained(adapter_dir, trust_remote_code=True)
@@ -102,6 +110,20 @@ def main():
         json.dump(DEFAULT_GENERATION_CONFIG, f, indent=2)
     print(f"[save] generation_config -> {gen_config_path}")
 
+    # Write a metadata file with the push timestamp. This guarantees the file
+    # tree changes between pushes even when model weights happen to hash
+    # identically, forcing HF's lastModified to advance and the course CI to
+    # pick up the new revision.
+    metadata = {
+        "push_timestamp": datetime.datetime.now().isoformat(),
+        "run_name": run_name,
+        "adapter_dir": str(adapter_dir),
+        "commit_message": commit_msg,
+    }
+    meta_path = merged_dir / ".push_metadata.json"
+    meta_path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+    print(f"[save] push metadata -> {meta_path}")
+
     verify_template(tokenizer)
 
     if not args.push:
@@ -110,6 +132,7 @@ def main():
         return
 
     print(f"[push] {merged_dir} -> https://huggingface.co/{args.hf_repo}")
+    print(f"[push] commit message: {commit_msg!r}")
     if not os.environ.get("HF_TOKEN"):
         print("[warn] HF_TOKEN not set; relying on cached `huggingface-cli login` creds")
 
@@ -118,7 +141,7 @@ def main():
     upload_folder(
         folder_path=str(merged_dir),
         repo_id=args.hf_repo,
-        commit_message=args.commit_msg,
+        commit_message=commit_msg,
     )
     print(f"[push] done — {args.hf_repo} should appear in the next nightly CI run")
 
