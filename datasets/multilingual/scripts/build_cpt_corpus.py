@@ -20,6 +20,8 @@ VERIFY the snapshot config exists before a long run:
 
 import argparse
 import json
+import os
+import sys
 from pathlib import Path
 
 from datasets import load_dataset
@@ -72,3 +74,11 @@ def main():
 
 if __name__ == "__main__":
     main()
+    # HF streaming leaves a background prefetch thread mid-request when we
+    # return early on the article cap. Normal interpreter shutdown then
+    # segfaults in the aiohttp/threading teardown (cosmetic — all data is
+    # already written and flushed by this point). Hard-exit to skip the
+    # broken finalization path.
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0)
