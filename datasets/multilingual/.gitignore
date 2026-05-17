@@ -1,5 +1,6 @@
 raw/
 _intermediate/
 cleaned_datasets/
+cpt_corpus/
 train.jsonl
 dev.jsonl
