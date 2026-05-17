@@ -94,19 +94,33 @@ def main():
     print(f"[data] {len(rows)} articles; "
           f"langs={dict(Counter(r.get('lang', '?') for r in rows))}")
 
-    ds = Dataset.from_list(rows)
-    ds = ds.map(lambda b: tok(b["text"], add_special_tokens=True),
-                batched=True, remove_columns=ds.column_names, desc="tokenize")
-
     block = args.block_size
+    packed_cache = Path(args.corpus_dir) / f".packed_{block}"
 
-    def group(batch):
-        concat = list(chain(*batch["input_ids"]))
-        n = (len(concat) // block) * block
-        ids = [concat[i:i + block] for i in range(0, n, block)]
-        return {"input_ids": ids, "labels": [x[:] for x in ids]}
+    if packed_cache.exists():
+        from datasets import load_from_disk
+        ds = load_from_disk(str(packed_cache))
+        print(f"[data] loaded pre-packed dataset from {packed_cache} "
+              f"({len(ds)} blocks)")
+    else:
+        ds = Dataset.from_list(rows)
+        ds = ds.map(lambda b: tok(b["text"], add_special_tokens=True),
+                    batched=True, remove_columns=ds.column_names,
+                    desc="tokenize")
 
-    ds = ds.map(group, batched=True, desc=f"pack into {block}-token blocks")
+        def group(batch):
+            concat = list(chain(*batch["input_ids"]))
+            n = (len(concat) // block) * block
+            ids = [concat[i:i + block] for i in range(0, n, block)]
+            return {"input_ids": ids, "labels": [x[:] for x in ids]}
+
+        # remove_columns drops the leftover attention_mask (old row count)
+        # so the row-count change from packing doesn't collide.
+        ds = ds.map(group, batched=True, remove_columns=ds.column_names,
+                    desc=f"pack into {block}-token blocks")
+        ds.save_to_disk(str(packed_cache))
+        print(f"[data] saved pre-packed dataset to {packed_cache}")
+
     n_tok = len(ds) * block
     print(f"[data] {len(ds)} packed blocks of {block} "
           f"(~{n_tok / 1e6:.1f}M training tokens)")
