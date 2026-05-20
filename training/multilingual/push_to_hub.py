@@ -31,14 +31,28 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 HERE = Path(__file__).parent
 
-DEFAULT_GENERATION_CONFIG = {
-    "do_sample": True,
-    "temperature": 0.2,
-    "top_p": 0.9,
-    "top_k": 50,
-    "max_new_tokens": 256,
-    "repetition_penalty": 1.0,
-}
+def build_generation_config(tokenizer):
+    """Build generation_config.json contents, resolving stop tokens against the
+    tokenizer at push time (so we don't hardcode model-version-specific IDs).
+
+    Two changes from the v1-v3 config:
+      - max_new_tokens 256 -> 32. The boxed answer is ~7 tokens; the old 256
+        let the model ramble after <|im_end|>, wasting the 1800s eval budget.
+      - Add <|im_end|> as eos_token_id so generation stops cleanly on the chat
+        turn boundary (Qwen3's <|im_end|> is the chat-turn terminator).
+    """
+    im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
+    if im_end_id is None or im_end_id == tokenizer.unk_token_id:
+        im_end_id = tokenizer.eos_token_id  # fallback; shouldn't trigger on Qwen3
+    return {
+        "do_sample": True,
+        "temperature": 0.2,
+        "top_p": 0.9,
+        "top_k": 50,
+        "max_new_tokens": 32,
+        "repetition_penalty": 1.0,
+        "eos_token_id": im_end_id,
+    }
 
 
 def force_no_think(tokenizer):
@@ -105,10 +119,13 @@ def main():
     model.save_pretrained(merged_dir, safe_serialization=True)
     tokenizer.save_pretrained(merged_dir)
 
+    gen_config = build_generation_config(tokenizer)
     gen_config_path = merged_dir / "generation_config.json"
     with gen_config_path.open("w", encoding="utf-8") as f:
-        json.dump(DEFAULT_GENERATION_CONFIG, f, indent=2)
-    print(f"[save] generation_config -> {gen_config_path}")
+        json.dump(gen_config, f, indent=2)
+    print(f"[save] generation_config -> {gen_config_path} "
+          f"(eos_token_id={gen_config['eos_token_id']}, "
+          f"max_new_tokens={gen_config['max_new_tokens']})")
 
     # Write a metadata file with the push timestamp. This guarantees the file
     # tree changes between pushes even when model weights happen to hash
