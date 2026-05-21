@@ -1,0 +1,35 @@
+# TIES merge: the principled approach when specialties have unequal delta
+# magnitudes (full-FT vs LoRA-merged in our team).
+#
+# How it works:
+#   1. Compute task vectors:  T_i = W_i - W_base   (each specialty's delta)
+#   2. Density pruning:       keep top-K% of |T_i| values per tensor, zero the rest
+#                             (removes low-magnitude noise that fights signal)
+#   3. Sign election:         per-parameter, pick the sign with majority/larger mass
+#   4. Disjoint merge:        average only the surviving parameters from each
+#                             specialty, then add base back
+#
+# density=0.5 -> keep top 50% magnitude per specialty's task vector. Standard
+# starting point; lower (0.3) is more aggressive pruning, higher (0.7) closer
+# to plain averaging. Tune if needed.
+#
+# Run with: bash run_merge.sh merge_ties.yaml outputs/ties_v1
+
+models:
+  - model: cs-552-2026-qwenlifegivesyoulemons/math_model
+    parameters: { density: 0.5, weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/general_knowledge_model
+    parameters: { density: 0.5, weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/safety_model
+    parameters: { density: 0.5, weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/multilingual_model
+    parameters: { density: 0.5, weight: 0.25 }
+
+# TIES requires the common base — task vectors are defined relative to it.
+base_model: Qwen/Qwen3-1.7B
+
+merge_method: ties
+parameters:
+  normalize: true       # rescale weights to sum to 1
+  int8_mask: true       # memory-efficient sign mask
+dtype: bfloat16
