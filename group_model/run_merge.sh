@@ -17,7 +17,11 @@ if [ -z "$YAML" ] || [ -z "$OUT" ]; then
     exit 1
 fi
 
-echo "[run_merge] installing mergekit..."
+echo "[run_merge] upgrading pydantic + installing mergekit..."
+# Cluster image ships pydantic 2.10.6 but mergekit's ConfiguredModuleArchitecture
+# has forward refs to torch types that need pydantic >= 2.11 to auto-resolve.
+# Without this upgrade, mergekit-yaml crashes mid-plan with "class not fully defined".
+pip install --quiet --upgrade "pydantic>=2.11"
 pip install --quiet mergekit
 
 # --cuda: use the A100 (1.7B merge is fast on GPU, slow on CPU)
