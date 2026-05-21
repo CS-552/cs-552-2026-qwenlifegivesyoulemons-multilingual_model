@@ -1,13 +1,11 @@
 #!/bin/bash
-# Install mergekit (if missing) and run a merge YAML.
+# Run a merge YAML using our custom merge.py (replaces mergekit because
+# mergekit 0.1.x crashes on the cluster image's pydantic — see merge.py
+# docstring for details).
 #
 # Usage:
 #   bash run_merge.sh merge_linear.yaml outputs/linear_v1
 #   bash run_merge.sh merge_ties.yaml   outputs/ties_v1
-#
-# Output directory will contain config.json, model.safetensors[.index.json],
-# tokenizer files, etc. — a complete Qwen3-1.7B-shaped checkpoint ready to
-# be finalized by push_group.py and uploaded to HF.
 set -e
 
 YAML="$1"
@@ -17,22 +15,8 @@ if [ -z "$YAML" ] || [ -z "$OUT" ]; then
     exit 1
 fi
 
-echo "[run_merge] upgrading pydantic + installing mergekit..."
-# Cluster image ships pydantic 2.10.6 but mergekit's ConfiguredModuleArchitecture
-# has forward refs to torch types that need pydantic >= 2.11 to auto-resolve.
-# Without this upgrade, mergekit-yaml crashes mid-plan with "class not fully defined".
-pip install --quiet --upgrade "pydantic>=2.11"
-pip install --quiet mergekit
+# pyyaml is standard but the image might lack it; quiet install if missing.
+python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
 
-# --cuda: use the A100 (1.7B merge is fast on GPU, slow on CPU)
-# --lazy-unpickle: load tensors lazily to keep memory peak low
-# --allow-crimes: tolerate minor config drift between specialties (they all
-#                 share architecture; this just avoids spurious assert failures)
-echo "[run_merge] running merge: $YAML -> $OUT"
-mergekit-yaml "$YAML" "$OUT" \
-    --cuda \
-    --lazy-unpickle \
-    --allow-crimes
-
-echo "[run_merge] merge complete. Next:"
-echo "    python3 push_group.py --merged_dir $OUT --push"
+echo "[run_merge] $YAML -> $OUT"
+exec python3 /scratch/multilingual/group_model/merge.py "$YAML" "$OUT"
