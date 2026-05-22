@@ -128,14 +128,22 @@ def main():
             train_src.extend(bucket)
             print(f"  {lang}: train_src={len(bucket)} dev_src=0 (English; not evaluated)")
 
-    # Per-source augmentation weight: regional sources get more copies than
-    # translated-academic bulk, so the model sees the eval distribution more.
+    # Per-source augmentation weight.
+    #   NATIVE_SMALL : genuinely tiny native sources (hundreds to ~3k items) —
+    #                  need replication to register; get include_weight x.
+    #   NATIVE_LARGE : native sources already large enough (6k-14k) — base
+    #                  copies only; upweighting them would over-replicate and
+    #                  risk overfitting on a few thousand unique questions.
+    #   global_mmlu bulk / mmlu_en : base copies (bulk is also bulk_cap'd).
+    NATIVE_SMALL = {"include", "kaleidoscope", "exams"}
+    NATIVE_LARGE = {"ceval", "cmmlu", "headqa", "milu"}
+
     def copies_for(item):
         if item.get("_is_cs"):
             return args.copies * args.cs_weight
-        if item["source"] == "include":
+        if item["source"] in NATIVE_SMALL:
             return args.copies * args.include_weight
-        return args.copies  # global_mmlu bulk, mmlu_en
+        return args.copies  # NATIVE_LARGE, global_mmlu bulk, mmlu_en
 
     train_aug = []
     src_copy_counts = Counter()
@@ -146,9 +154,10 @@ def main():
         for _ in range(n_copies):
             train_aug.append(augment_one(item, pool, rng))
     print(f"Train augmented: {len(train_src)} src -> {len(train_aug)} aug")
-    print(f"  src item counts by bucket: {dict(src_copy_counts)}")
-    print(f"  copies: bulk={args.copies} cs={args.copies*args.cs_weight} "
-          f"include={args.copies*args.include_weight}")
+    print(f"  src item counts by source: {dict(src_copy_counts)}")
+    print(f"  copies: base={args.copies}  cs={args.copies*args.cs_weight}  "
+          f"native_small={args.copies*args.include_weight}  "
+          f"native_large/bulk/en={args.copies}")
 
     # Augment dev: exactly one copy per held-out source item.
     dev_aug = [augment_one(item, pool, rng) for item in dev_src]

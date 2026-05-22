@@ -19,11 +19,13 @@ echo "[run_train] verifying bnb import..."
 python3 -c "import bitsandbytes; print('[run_train] bnb import OK')"
 
 echo "[run_train] starting training..."
-# v3: more LoRA capacity (r=32 -> 64) to absorb the broader regional mix.
+# v5: pure LoRA-SFT on the native-regional-harvest-enriched data
+# (CMMLU/C-Eval/HEAD-QA/EXAMS/Kaleidoscope). Base = vanilla Qwen3-1.7B —
+# NOT the CPT checkpoint, since CPT (v4) regressed. r=64 for capacity.
 exec python3 /scratch/multilingual/training/multilingual/train_lora.py \
     --train_file /scratch/multilingual/datasets/multilingual/train.jsonl \
     --dev_file /scratch/multilingual/datasets/multilingual/dev.jsonl \
-    --output_dir /scratch/multilingual/training/multilingual/outputs/lora_v3 \
-    --run_name lora_v3 \
+    --output_dir /scratch/multilingual/training/multilingual/outputs/lora_v5 \
+    --run_name lora_v5 \
     --lora_r 64 \
     --lora_alpha 128
