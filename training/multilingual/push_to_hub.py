@@ -31,20 +31,20 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 HERE = Path(__file__).parent
 
-def build_generation_config(tokenizer, greedy=False):
+def build_generation_config(tokenizer, greedy=False, thinking=False):
     """Build generation_config.json contents, resolving stop tokens against the
     tokenizer at push time (so we don't hardcode model-version-specific IDs).
 
-    With --greedy: do_sample=False, no temperature/top_p/top_k. Useful for
-    testing whether pass@1 leaks points to sampling variance — at temp=0.2
-    we still occasionally sample a non-most-likely letter, which can hurt
-    when the most-likely answer is the right one.
+    - --greedy   : do_sample=False (else temp 0.2 / top_p 0.9 / top_k 50)
+    - --thinking : bumps max_new_tokens to 512 so the model has room to emit
+                   a reasoning trace before the final \\boxed{X}; with no_think
+                   the boxed answer is ~7 tokens and 32 suffices.
     """
     im_end_id = tokenizer.convert_tokens_to_ids("<|im_end|>")
     if im_end_id is None or im_end_id == tokenizer.unk_token_id:
         im_end_id = tokenizer.eos_token_id
     cfg = {
-        "max_new_tokens": 32,
+        "max_new_tokens": 512 if thinking else 32,
         "repetition_penalty": 1.0,
         "eos_token_id": im_end_id,
     }
@@ -60,11 +60,30 @@ def build_generation_config(tokenizer, greedy=False):
     return cfg
 
 
+NO_THINK_LINE = "{%- set enable_thinking = false %}\n"
+THINK_LINE = "{%- set enable_thinking = true %}\n"
+
+
+def _strip_existing_override(template):
+    """Remove any pre-existing enable_thinking override so we can switch modes."""
+    for line in (NO_THINK_LINE, THINK_LINE):
+        if template.startswith(line):
+            return template[len(line):]
+    return template
+
+
 def force_no_think(tokenizer):
-    override = (HERE / "chat_template.jinja").read_text(encoding="utf-8")
-    base = tokenizer.chat_template or ""
-    if override.strip() and override.strip() not in base:
-        tokenizer.chat_template = override + base
+    """Bake enable_thinking=false into the Qwen3 chat template."""
+    base = _strip_existing_override(tokenizer.chat_template or "")
+    tokenizer.chat_template = NO_THINK_LINE + base
+    return tokenizer
+
+
+def force_thinking(tokenizer):
+    """Bake enable_thinking=true. Qwen3's default IS thinking-on, but we set
+    it explicitly so the template doesn't depend on caller-side flags."""
+    base = _strip_existing_override(tokenizer.chat_template or "")
+    tokenizer.chat_template = THINK_LINE + base
     return tokenizer
 
 
@@ -99,6 +118,12 @@ def main():
                     help="write a greedy generation_config (do_sample=False, "
                          "no temp/top_p/top_k). Use to test whether sampling "
                          "variance is leaking pass@1 points at temp=0.2.")
+    ap.add_argument("--thinking", action="store_true",
+                    help="enable Qwen3 thinking mode (enable_thinking=true in "
+                         "chat template) and bump max_new_tokens to 512. Small "
+                         "models tend to gain disproportionately from thinking "
+                         "on MC tasks; we previously had this OFF for a "
+                         "wall-clock concern that doesn't bind at our scale.")
     args = ap.parse_args()
 
     adapter_dir = Path(args.adapter_dir).resolve()
@@ -111,7 +136,12 @@ def main():
 
     print(f"[load] tokenizer from {adapter_dir}")
     tokenizer = AutoTokenizer.from_pretrained(adapter_dir, trust_remote_code=True)
-    force_no_think(tokenizer)
+    if args.thinking:
+        force_thinking(tokenizer)
+        print("[template] enable_thinking=TRUE (Qwen3 will emit reasoning before answer)")
+    else:
+        force_no_think(tokenizer)
+        print("[template] enable_thinking=false (direct \\boxed{X} output)")
 
     print(f"[load] base {args.base_model} (bf16)")
     base = AutoModelForCausalLM.from_pretrained(
@@ -128,7 +158,9 @@ def main():
     model.save_pretrained(merged_dir, safe_serialization=True)
     tokenizer.save_pretrained(merged_dir)
 
-    gen_config = build_generation_config(tokenizer, greedy=args.greedy)
+    gen_config = build_generation_config(tokenizer,
+                                         greedy=args.greedy,
+                                         thinking=args.thinking)
     gen_config_path = merged_dir / "generation_config.json"
     with gen_config_path.open("w", encoding="utf-8") as f:
         json.dump(gen_config, f, indent=2)
