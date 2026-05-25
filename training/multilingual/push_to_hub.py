@@ -60,30 +60,30 @@ def build_generation_config(tokenizer, greedy=False, thinking=False):
     return cfg
 
 
-NO_THINK_LINE = "{%- set enable_thinking = false %}\n"
-THINK_LINE = "{%- set enable_thinking = true %}\n"
+def apply_custom_template(tokenizer, thinking=False):
+    """Replace the tokenizer's chat_template with our full custom template
+    (chat_template.jinja), not just an override line.
 
+    The template injects:
+      - a default system message framing the model as a multilingual MC
+        classifier with the exact \\boxed{X} (X in A-T) output contract,
+      - a per-turn user_instruction_suffix hammering the same format,
+      - enable_thinking=false (or true with --thinking),
+      - the /no_think soft switch inside the system message as belt-and-
+        suspenders against any leaked reasoning.
 
-def _strip_existing_override(template):
-    """Remove any pre-existing enable_thinking override so we can switch modes."""
-    for line in (NO_THINK_LINE, THINK_LINE):
-        if template.startswith(line):
-            return template[len(line):]
-    return template
-
-
-def force_no_think(tokenizer):
-    """Bake enable_thinking=false into the Qwen3 chat template."""
-    base = _strip_existing_override(tokenizer.chat_template or "")
-    tokenizer.chat_template = NO_THINK_LINE + base
-    return tokenizer
-
-
-def force_thinking(tokenizer):
-    """Bake enable_thinking=true. Qwen3's default IS thinking-on, but we set
-    it explicitly so the template doesn't depend on caller-side flags."""
-    base = _strip_existing_override(tokenizer.chat_template or "")
-    tokenizer.chat_template = THINK_LINE + base
+    The CI passes only `messages` (no system message) to apply_chat_template,
+    so a default system message MUST be baked into the template itself — we
+    can't inject it at inference time.
+    """
+    template = (HERE / "chat_template.jinja").read_text(encoding="utf-8")
+    if thinking:
+        # Flip the single bool that controls thinking; everything else stays.
+        template = template.replace(
+            "set enable_thinking = false",
+            "set enable_thinking = true",
+        )
+    tokenizer.chat_template = template
     return tokenizer
 
 
@@ -136,12 +136,10 @@ def main():
 
     print(f"[load] tokenizer from {adapter_dir}")
     tokenizer = AutoTokenizer.from_pretrained(adapter_dir, trust_remote_code=True)
-    if args.thinking:
-        force_thinking(tokenizer)
-        print("[template] enable_thinking=TRUE (Qwen3 will emit reasoning before answer)")
-    else:
-        force_no_think(tokenizer)
-        print("[template] enable_thinking=false (direct \\boxed{X} output)")
+    apply_custom_template(tokenizer, thinking=args.thinking)
+    print(f"[template] custom MC-classifier template applied "
+          f"(enable_thinking={'true' if args.thinking else 'false'}, "
+          f"default system_message + user_instruction_suffix baked in)")
 
     print(f"[load] base {args.base_model} (bf16)")
     base = AutoModelForCausalLM.from_pretrained(
