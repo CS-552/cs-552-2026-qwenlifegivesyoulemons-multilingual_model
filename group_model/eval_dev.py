@@ -45,7 +45,16 @@ def main():
     ap.add_argument("--temperature", type=float, default=0.2)
     ap.add_argument("--batch_size", type=int, default=8)
     ap.add_argument("--limit", type=int, default=0, help="0 = all dev items")
+    ap.add_argument("--seed", type=int, default=42,
+                    help="seeds torch RNG so do_sample=True runs are reproducible")
     args = ap.parse_args()
+
+    # Seed everything we can — torch, cuda, and python's RNG. With do_sample
+    # at temp=0.2 the model is mostly deterministic anyway, but seeding pins
+    # whatever variance remains so two runs give the same numbers.
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     # Load model + tokenizer
     print(f"[load] model: {args.model_dir}")
