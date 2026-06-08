@@ -1,0 +1,31 @@
+#!/bin/bash
+# Wrapper around train_lora.py for the EPFL RCP cluster.
+#
+# The course image ships an old bitsandbytes without a CUDA 12.8 binary,
+# but PEFT imports bnb at LoRA-creation time even when we never call into it.
+# Force-reinstall a recent wheel that has the cu128 binary, then train.
+#
+# Invoked from runai submit:
+#   --command -- bash /scratch/multilingual/training/multilingual/run_train.sh
+set -e
+
+echo "[run_train] fixing bitsandbytes (cluster image ships an incompatible version)..."
+# --no-deps: pip's resolver rejects all bnb versions because the image has
+# PyTorch 2.10+cu128 (newer than what bnb pins to). bnb doesn't actually need
+# a different torch, so we bypass the resolver and force the install.
+pip install --quiet --no-deps --force-reinstall "bitsandbytes>=0.43.0"
+
+echo "[run_train] verifying bnb import..."
+python3 -c "import bitsandbytes; print('[run_train] bnb import OK')"
+
+echo "[run_train] starting training..."
+# v5: pure LoRA-SFT on the native-regional-harvest-enriched data
+# (CMMLU/C-Eval/HEAD-QA/EXAMS/Kaleidoscope). Base = vanilla Qwen3-1.7B —
+# NOT the CPT checkpoint, since CPT (v4) regressed. r=64 for capacity.
+exec python3 /scratch/multilingual/training/multilingual/train_lora.py \
+    --train_file /scratch/multilingual/datasets/multilingual/train.jsonl \
+    --dev_file /scratch/multilingual/datasets/multilingual/dev.jsonl \
+    --output_dir /scratch/multilingual/training/multilingual/outputs/lora_v5 \
+    --run_name lora_v5 \
+    --lora_r 64 \
+    --lora_alpha 128

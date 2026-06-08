@@ -1,0 +1,19 @@
+# Plain equal-weight average of all 4 specialty checkpoints.
+# Baseline only — full-FT specialties tend to dominate LoRA-merged ones in
+# linear averaging because their deltas from base are larger. We use this
+# mainly as a floor to compare TIES against.
+#
+# Run with: bash run_merge.sh merge_linear.yaml outputs/linear_v1
+
+models:
+  - model: cs-552-2026-qwenlifegivesyoulemons/math_model
+    parameters: { weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/general_knowledge_model
+    parameters: { weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/safety_model
+    parameters: { weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/multilingual_model
+    parameters: { weight: 0.25 }
+
+merge_method: linear
+dtype: bfloat16

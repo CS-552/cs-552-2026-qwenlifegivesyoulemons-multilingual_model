@@ -1,0 +1,20 @@
+# TIES merge configuration used to produce v_ties (rejected, 0.295).
+# Resolved via group_model/merge.py because mergekit's pydantic 2.10.6
+# dependency breaks on the cluster image.
+#
+# Replace the <...> model ids with the exact HF revisions used at merge time
+# (commit hashes, not 'main') for strict reproducibility.
+
+merge_method: ties
+base_model: Qwen/Qwen3-1.7B
+density: 0.5
+models:
+  - model: <math specialist HF id @ commit>
+    parameters: { weight: 0.25 }
+  - model: <gk specialist HF id @ commit>
+    parameters: { weight: 0.25 }
+  - model: <safety specialist HF id @ commit>
+    parameters: { weight: 0.25 }
+  - model: cs-552-2026-qwenlifegivesyoulemons/multilingual_model@<commit>
+    parameters: { weight: 0.25 }
+dtype: bfloat16
