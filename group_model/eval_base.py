@@ -35,11 +35,39 @@ BASE_MODEL = "Qwen/Qwen3-1.7B"
 # of brace nesting (e.g. \boxed{\frac{1}{2}}) is supported.
 BOXED_RE = re.compile(r"\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}")
 
+# Soft-extraction patterns for the base model, which doesn't naturally emit
+# \boxed{...}. Tried in order; the LAST positional match across all patterns
+# wins (the answer usually comes after the reasoning). Used only when
+# --soft_match is passed.
+SOFT_PATTERNS = [
+    re.compile(r"(?:final\s+)?answer\s*(?:is)?\s*:?\s*\**\s*\(?([A-T])\)?\b", re.IGNORECASE),
+    re.compile(r"the\s+correct\s+(?:answer|option|choice)\s+is\s*\**\s*\(?([A-T])\)?\b", re.IGNORECASE),
+    re.compile(r"\b(?:option|choice)\s+\(?([A-T])\)?\b", re.IGNORECASE),
+    re.compile(r"(?:^|\n)\s*\**\s*\(?([A-T])\)?\s*\**\s*$", re.MULTILINE),
+    re.compile(r"\b([A-T])\b"),  # lowest confidence: any isolated capital letter
+]
+
 
 def extract_boxed(text):
     # Take the LAST match — for math chains the answer comes after the reasoning.
     matches = list(BOXED_RE.finditer(text))
     return matches[-1].group(1).strip() if matches else None
+
+
+def soft_extract(text):
+    # Strict boxed wins if present
+    boxed = extract_boxed(text)
+    if boxed is not None:
+        return boxed
+    # Otherwise try soft patterns; return the LAST positional match
+    # (Answer is usually emitted after the reasoning chain)
+    candidates = []
+    for pat in SOFT_PATTERNS:
+        for m in pat.finditer(text):
+            candidates.append((m.start(), m.group(1).upper()))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda x: x[0])[1]
 
 
 def normalize(s):
@@ -63,7 +91,14 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="0 = all dev items")
     ap.add_argument("--seed", type=int, default=42,
                     help="seeds torch + cuda RNG so do_sample=True is reproducible")
+    ap.add_argument("--soft_match", action="store_true",
+                    help="fall back to letter-pattern extraction when no \\boxed{} "
+                         "is produced. Required for the base model, which wasn't "
+                         "trained on the boxed-output contract — without this every "
+                         "prediction is None and pass@1 is artificially 0%%.")
     args = ap.parse_args()
+    extractor = soft_extract if args.soft_match else extract_boxed
+    print(f"[extract] using {'soft_extract (boxed -> answer-is -> letter)' if args.soft_match else 'strict extract_boxed'}")
 
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
@@ -90,6 +125,9 @@ def main():
     #  - group_model dev:  {"prompt", "target", "domain", "lang"}  -> gold is the \boxed in target
     #  - multilingual dev: {"prompt", "answer", "lang", "source"} -> gold is the answer field
     for r in rows:
+        # Gold extraction always uses STRICT boxed parsing — the gold targets
+        # are authored with \boxed{} and we don't want soft matching to confuse
+        # the ground truth.
         if "target" in r:
             r["gold"] = extract_boxed(r["target"])
         else:
@@ -124,7 +162,7 @@ def main():
         for j, r in enumerate(batch):
             in_len = inputs.input_ids[j].ne(tok.pad_token_id).sum().item()
             gen = tok.decode(out[j][in_len:], skip_special_tokens=False)
-            predicted = extract_boxed(gen)
+            predicted = extractor(gen)  # extract_boxed or soft_extract per --soft_match
             r["pred"] = predicted
             r["correct"] = (
                 predicted is not None
